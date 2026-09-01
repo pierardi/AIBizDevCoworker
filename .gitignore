@@ -6,3 +6,5 @@ venv/
 .streamlit/secrets.toml
 *.csv
 data/
+node_modules/
+dist/
