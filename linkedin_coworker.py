@@ -76,6 +76,13 @@ st.markdown(
     .email-chrome .row { display: flex; gap: 8px; }
     .email-chrome .lbl { color: #667085; min-width: 64px; font-weight: 600; }
     .match-meta { color: #475467; font-size: 0.9rem; margin: 0; }
+    [data-testid="stTextArea"] textarea {
+        white-space: pre-wrap !important;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        resize: vertical !important;
+        line-height: 1.4;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -527,9 +534,10 @@ with left:
         st.caption(f"{len(st.session_state.connections_df)} connections loaded.")
 
     st.subheader("Topic")
-    topic = st.text_input(
+    topic = st.text_area(
         "What do you want to reach out about?",
         key="topic",
+        height=68,
         placeholder="e.g. our new AI-powered inventory forecasting tool for retail ops teams",
     )
     run_ranking = st.button("🔍 Find top 10 matches", type="primary", width="stretch")
@@ -539,7 +547,7 @@ with left:
         client = get_client()
         if df is None:
             st.error("Upload your connections CSV first.")
-        elif not topic.strip():
+        elif not (topic or "").strip():
             st.error("Enter a topic first.")
         elif client is None:
             st.error("Add your OpenAI API key in the sidebar first.")
