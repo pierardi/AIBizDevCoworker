@@ -23,15 +23,23 @@ have a legitimate right to:
    you have their email address) -- this app never sends anything on
    your behalf automatically.
 
-SETUP
------
-pip install streamlit openai pandas
-streamlit run linkedin_coworker.py
+SETUP (local)
+-------------
+pip install -r requirements.txt
+python -m streamlit run linkedin_coworker.py --server.port 8502
+
+STREAMLIT COMMUNITY CLOUD
+-------------------------
+1. Push this repo to GitHub.
+2. At share.streamlit.io, deploy linkedin_coworker.py from the repo.
+3. In App settings -> Secrets, add:
+   openai_api_key = "sk-..."
 """
 
 import html
-import json
 import io
+import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -92,10 +100,35 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 
+def is_streamlit_cloud():
+    """Community Cloud uses a shared, ephemeral filesystem — do not persist user data there."""
+    return (
+        Path("/mount/src").exists()
+        or os.getenv("STREAMLIT_RUNTIME_ENV") == "cloud"
+        or os.getenv("USER") == "appuser"
+    )
+
+
+def persist_to_disk():
+    return not is_streamlit_cloud()
+
+
+def secret_api_key():
+    try:
+        return str(st.secrets.get("openai_api_key") or "").strip()
+    except Exception:
+        return ""
+
+
+def get_api_key():
+    return (st.session_state.get("openai_api_key") or "").strip() or secret_api_key()
+
+
 def get_client():
-    if not st.session_state.openai_api_key:
+    key = get_api_key()
+    if not key:
         return None
-    return OpenAI(api_key=st.session_state.openai_api_key)
+    return OpenAI(api_key=key)
 
 
 def _json_default(o):
@@ -120,7 +153,7 @@ def drafts_from_json(raw):
 
 
 def load_settings():
-    if not SETTINGS_PATH.exists():
+    if not persist_to_disk() or not SETTINGS_PATH.exists():
         return False
     try:
         payload = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
@@ -134,13 +167,15 @@ def load_settings():
 
 
 def save_settings():
+    if not persist_to_disk():
+        return
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     payload = {key: st.session_state.get(key, "") or "" for key in SETTING_KEYS}
     SETTINGS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def load_persisted_top10():
-    if not PERSIST_PATH.exists():
+    if not persist_to_disk() or not PERSIST_PATH.exists():
         return False
     try:
         payload = json.loads(PERSIST_PATH.read_text(encoding="utf-8"))
@@ -160,6 +195,8 @@ def load_persisted_top10():
 
 if not st.session_state.settings_hydrated:
     load_settings()
+    if not st.session_state.openai_api_key and secret_api_key():
+        st.session_state.openai_api_key = secret_api_key()
     st.session_state.settings_hydrated = True
 
 if not st.session_state.ranked:
@@ -213,6 +250,8 @@ def save_top10():
             drafts[pid] = st.session_state.drafts[pid]
     st.session_state.drafts = drafts
     st.session_state.ranked_saved_at = datetime.now(timezone.utc).isoformat()
+    if not persist_to_disk():
+        return
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "saved_at": st.session_state.ranked_saved_at,
@@ -360,9 +399,17 @@ def rank_connections(df, topic):
 
     all_scores = {}
     batch_size = 60
-    progress = st.progress(0.0)
-    for start in range(0, len(roster), batch_size):
+    total = len(roster)
+
+    def ranking_status(done):
+        left = max(0, total - done)
+        return f"{done} of {total} contacts processed, {left} left"
+
+    progress = st.progress(0.0, text=ranking_status(0))
+    for start in range(0, total, batch_size):
         batch = roster[start:start + batch_size]
+        batch_end = min(start + len(batch), total)
+        progress.progress(start / total if total else 1.0, text=ranking_status(start))
         prompt = f"""You are helping {st.session_state.user_name or "a professional"} \
 ({st.session_state.user_headline or "no headline provided"}) figure out which of \
 their LinkedIn connections would most likely be interested in this topic:
@@ -402,7 +449,7 @@ One entry per connection given, in any order."""
                 all_scores[item["id"]] = item
         except Exception as e:
             st.warning(f"A batch failed to score ({e}); skipping those connections.")
-        progress.progress(min(1.0, (start + batch_size) / len(roster)))
+        progress.progress(batch_end / total if total else 1.0, text=ranking_status(batch_end))
 
     for r in roster:
         s = all_scores.get(r["id"], {"score": 0, "reason": "not scored"})
@@ -424,13 +471,16 @@ with st.sidebar:
         "API Key",
         key="openai_api_key",
         type="password",
-        help="Get one at platform.openai.com/api-keys. Saved locally on this computer, not uploaded anywhere.",
+        help="Get one at platform.openai.com/api-keys. On Streamlit Cloud, you can also set openai_api_key in App secrets.",
     )
 
     st.divider()
 
     st.subheader("Your LinkedIn Profile")
-    st.caption("This context helps the AI write messages that sound like you and match your positioning. Saved locally.")
+    st.caption(
+        "Used so drafted messages sound like you. "
+        + ("Saved on this computer." if persist_to_disk() else "Kept for this browser session.")
+    )
     st.text_input("Your name", key="user_name")
     st.text_input(
         "Your headline / role",
@@ -451,8 +501,8 @@ with st.sidebar:
 st.title("🤝 BizDev Coworker")
 st.caption("Inside-sales coworker: rank connections for a topic, then draft outreach to send yourself.")
 
-if not st.session_state.openai_api_key:
-    st.warning("Add your OpenAI API key in the sidebar to get started.")
+if not get_api_key():
+    st.warning("Add your OpenAI API key in the sidebar (or in Streamlit secrets) to get started.")
 
 left, right = st.columns([0.9, 1.15], gap="large")
 
@@ -507,7 +557,11 @@ with right:
         topic_label = st.session_state.ranked_topic
         if topic_label:
             st.caption(f"Ranked for: {topic_label}")
-        st.caption("Saved on this computer — the list stays after refresh.")
+        st.caption(
+            "Saved on this computer — the list stays after refresh."
+            if persist_to_disk()
+            else "Kept for this browser session. Export the list if you want a copy."
+        )
         st.download_button(
             "Export list",
             data=ranked_export_csv(),
