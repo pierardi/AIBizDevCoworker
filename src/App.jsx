@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { parseLinkedInCsv, rowsToRoster } from "./lib/csv";
 import { scoreBatch, generateDraft, emailToLine, exportCsv } from "./lib/openai";
-import { loadSettings, saveSettings, loadTop10, saveTop10 } from "./lib/storage";
+import { loadSettings, saveSettings, loadTop10, saveTop10, normalizeMatchCount } from "./lib/storage";
 import "./App.css";
 
 const BATCH_SIZE = 60;
 const savedSettings = loadSettings();
 const savedTop10 = loadTop10();
+
+function initialDarkMode() {
+  if (typeof savedSettings.darkMode === "boolean") return savedSettings.darkMode;
+  return Boolean(window.matchMedia?.("(prefers-color-scheme: dark)")?.matches);
+}
 
 function downloadText(filename, text, mime) {
   const blob = new Blob([text], { type: mime });
@@ -22,6 +27,8 @@ export default function App() {
   const [openaiApiKey, setOpenaiApiKey] = useState(savedSettings.openaiApiKey || "");
   const [userName, setUserName] = useState(savedSettings.userName || "");
   const [userHeadline, setUserHeadline] = useState(savedSettings.userHeadline || "");
+  const [matchCount, setMatchCount] = useState(normalizeMatchCount(savedSettings.matchCount));
+  const [darkMode, setDarkMode] = useState(initialDarkMode);
   const [headers, setHeaders] = useState([]);
   const [rows, setRows] = useState([]);
   const [csvError, setCsvError] = useState("");
@@ -38,8 +45,12 @@ export default function App() {
   const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
-    saveSettings({ openaiApiKey, userName, userHeadline });
-  }, [openaiApiKey, userName, userHeadline]);
+    saveSettings({ openaiApiKey, userName, userHeadline, matchCount, darkMode });
+  }, [openaiApiKey, userName, userHeadline, matchCount, darkMode]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = darkMode ? "dark" : "light";
+  }, [darkMode]);
 
   useEffect(() => {
     if (ranked.length) saveTop10({ ranked, rankedTopic, drafts });
@@ -108,7 +119,8 @@ export default function App() {
         const s = scores[r.id] || { score: 0, reason: "not scored" };
         return { ...r, score: s.score || 0, reason: s.reason || "" };
       });
-      const top = [...withScores].sort((a, b) => b.score - a.score).slice(0, 10);
+      const take = Math.min(normalizeMatchCount(matchCount), withScores.length);
+      const top = [...withScores].sort((a, b) => b.score - a.score).slice(0, take);
       setRanked(top);
       setRankedTopic(topic);
       setDrafts({});
@@ -156,6 +168,17 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <h2>⚙️ Setup</h2>
+        <label className="theme-switch">
+          <span>Dark mode</span>
+          <span className="switch">
+            <input
+              type="checkbox"
+              checked={darkMode}
+              onChange={(e) => setDarkMode(e.target.checked)}
+            />
+            <span className="track" />
+          </span>
+        </label>
         <div className="field">
           <h3>OpenAI API Key</h3>
           <input
@@ -182,6 +205,20 @@ export default function App() {
             onChange={(e) => setUserHeadline(e.target.value)}
             placeholder="e.g. Founder @ Acme AI | Building tools for sales teams"
           />
+        </div>
+        <div className="field">
+          <label htmlFor="matchCount">Number of top matches</label>
+          <input
+            id="matchCount"
+            type="number"
+            min="1"
+            max="100"
+            step="1"
+            value={matchCount}
+            onChange={(e) => setMatchCount(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => setMatchCount(normalizeMatchCount(matchCount))}
+          />
+          <span className="hint">Everyone is scored; this is how many of the highest matches to keep (1–100).</span>
         </div>
         <hr className="div" />
         <p className="fine">
@@ -249,7 +286,7 @@ export default function App() {
               />
             </div>
             <button className="btn btn-primary" type="button" onClick={findMatches} disabled={ranking}>
-              {ranking ? "Scoring…" : "🔍 Find top 10 matches"}
+              {ranking ? "Scoring…" : `🔍 Find top ${matchCount} matches`}
             </button>
             {error && <p className="err">{error}</p>}
             {ranking && (
@@ -265,7 +302,7 @@ export default function App() {
           </section>
 
           <section className="panel">
-            <h2>Top 10 matches</h2>
+            <h2>Top {ranked.length || matchCount} matches</h2>
             {ranked.length > 0 ? (
               <>
                 {rankedTopic && <p className="hint">Ranked for: {rankedTopic}</p>}
@@ -274,7 +311,7 @@ export default function App() {
                   <button
                     className="btn btn-secondary"
                     type="button"
-                    onClick={() => downloadText("bizdev_top10_matches.csv", exportCsv(ranked, drafts), "text/csv")}
+                    onClick={() => downloadText(`bizdev_top${ranked.length}_matches.csv`, exportCsv(ranked, drafts), "text/csv")}
                   >
                     Export list
                   </button>
@@ -305,7 +342,7 @@ export default function App() {
                 </div>
               </>
             ) : (
-              <div className="info">Matches will appear here after you upload a list, enter a topic, and find the top 10.</div>
+              <div className="info">Matches will appear here after you upload a list, enter a topic, and find the top {matchCount}.</div>
             )}
           </section>
         </div>

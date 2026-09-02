@@ -1,27 +1,118 @@
+:root {
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --text: #111827;
+  --muted: #667085;
+  --lede: #475467;
+  --border: #e5e7eb;
+  --input-border: #d0d5dd;
+  --drop-border: #cbd5e1;
+  --warn-bg: #fff7ed;
+  --warn-border: #fdba74;
+  --warn-text: #9a3412;
+  --ok-bg: #ecfdf3;
+  --ok-border: #86efac;
+  --ok-text: #166534;
+  --err: #b42318;
+  --info-bg: #eff6ff;
+  --info-border: #bfdbfe;
+  --info-text: #1e3a8a;
+  --progress-track: #e5e7eb;
+  --progress-fill: #ff4b4b;
+  --primary: #ff4b4b;
+  --primary-text: #ffffff;
+  --email-hdr: #f8fafc;
+  --backdrop: rgba(15, 23, 42, 0.45);
+  --switch-off: #cbd5e1;
+}
+
+[data-theme="dark"] {
+  --bg: #0f1419;
+  --surface: #1a222c;
+  --text: #e8eef5;
+  --muted: #9aa8b8;
+  --lede: #b6c2d0;
+  --border: #2c3947;
+  --input-border: #3d4d5c;
+  --drop-border: #3d4d5c;
+  --warn-bg: #3b2710;
+  --warn-border: #a16207;
+  --warn-text: #fde68a;
+  --ok-bg: #052e16;
+  --ok-border: #166534;
+  --ok-text: #86efac;
+  --err: #fca5a5;
+  --info-bg: #172554;
+  --info-border: #1e3a8a;
+  --info-text: #bfdbfe;
+  --progress-track: #2c3947;
+  --progress-fill: #ff6b6b;
+  --primary: #ff6b6b;
+  --primary-text: #1a1010;
+  --email-hdr: #12181f;
+  --backdrop: rgba(0, 0, 0, 0.65);
+  --switch-off: #3d4d5c;
+}
+
 .app {
   display: grid;
   grid-template-columns: 280px 1fr;
   min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
 }
 
 .sidebar {
-  background: #ffffff;
-  border-right: 1px solid #e5e7eb;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
   padding: 1.25rem 1.1rem;
 }
 
 .sidebar h2 { margin: 0 0 1rem; font-size: 1.05rem; }
 .sidebar h3 { margin: 0 0 0.5rem; font-size: 0.92rem; }
-.sidebar .hint, .sidebar .fine { color: #667085; font-size: 0.82rem; }
+.sidebar .hint, .sidebar .fine { color: var(--muted); font-size: 0.82rem; }
 .sidebar .fine { margin-top: 1rem; }
+
+.theme-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+.theme-switch > span { font-size: 0.85rem; font-weight: 600; }
+.switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .track {
+  position: absolute;
+  inset: 0;
+  background: var(--switch-off);
+  border-radius: 99px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.switch input:checked + .track { background: var(--primary); }
+.switch .track::after {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+.switch input:checked + .track::after { transform: translateX(18px); }
 
 .field { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.85rem; }
 .field label { font-size: 0.85rem; font-weight: 600; }
 .field input, .field textarea {
-  border: 1px solid #d0d5dd;
+  border: 1px solid var(--input-border);
   border-radius: 8px;
   padding: 0.45rem 0.6rem;
-  background: #fff;
+  background: var(--bg);
+  color: var(--text);
 }
 .field textarea {
   min-height: 4.5em;
@@ -31,33 +122,33 @@
   line-height: 1.4;
 }
 
-hr.div { border: 0; border-top: 1px solid #e5e7eb; margin: 1rem 0; }
+hr.div { border: 0; border-top: 1px solid var(--border); margin: 1rem 0; }
 
 .main { padding: 1.25rem 1.5rem 1.5rem; }
 .main h1 { margin: 0 0 0.2rem; font-size: 1.6rem; }
-.lede { color: #475467; margin: 0 0 1rem; }
+.lede { color: var(--lede); margin: 0 0 1rem; }
 
 .warn {
-  background: #fff7ed;
-  border: 1px solid #fdba74;
-  color: #9a3412;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-text);
   padding: 0.65rem 0.8rem;
   border-radius: 8px;
   margin-bottom: 1rem;
 }
 .ok {
-  background: #ecfdf3;
-  border: 1px solid #86efac;
-  color: #166534;
+  background: var(--ok-bg);
+  border: 1px solid var(--ok-border);
+  color: var(--ok-text);
   padding: 0.5rem 0.75rem;
   border-radius: 8px;
   font-size: 0.9rem;
 }
-.err { color: #b42318; font-size: 0.9rem; margin: 0.4rem 0; }
+.err { color: var(--err); font-size: 0.9rem; margin: 0.4rem 0; }
 .info {
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  color: #1e3a8a;
+  background: var(--info-bg);
+  border: 1px solid var(--info-border);
+  color: var(--info-text);
   padding: 0.8rem;
   border-radius: 8px;
 }
@@ -71,17 +162,17 @@ hr.div { border: 0; border-top: 1px solid #e5e7eb; margin: 1rem 0; }
 
 .panel h2 { margin: 0 0 0.35rem; font-size: 1.1rem; }
 .drop {
-  border: 1.5px dashed #cbd5e1;
+  border: 1.5px dashed var(--drop-border);
   border-radius: 10px;
   padding: 1.1rem;
   text-align: center;
-  background: #fff;
+  background: var(--surface);
   margin: 0.5rem 0 0.75rem;
 }
 .drop input { margin-top: 0.5rem; }
 .preview { margin-top: 0.6rem; font-size: 0.82rem; overflow: auto; max-height: 180px; }
-.preview table { border-collapse: collapse; width: 100%; background: #fff; }
-.preview th, .preview td { border: 1px solid #e5e7eb; padding: 0.25rem 0.4rem; text-align: left; }
+.preview table { border-collapse: collapse; width: 100%; background: var(--surface); }
+.preview th, .preview td { border: 1px solid var(--border); padding: 0.25rem 0.4rem; text-align: left; }
 
 .btn {
   border: 0;
@@ -92,39 +183,43 @@ hr.div { border: 0; border-top: 1px solid #e5e7eb; margin: 1rem 0; }
   font-weight: 600;
 }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.btn-primary { background: #ff4b4b; color: #fff; }
-.btn-secondary { background: #fff; border: 1px solid #d0d5dd; color: #111827; }
+.btn-primary { background: var(--primary); color: var(--primary-text); }
+.btn-secondary {
+  background: var(--surface);
+  border: 1px solid var(--input-border);
+  color: var(--text);
+}
 .btn-row { margin: 0.6rem 0; }
 
 .progress-wrap { margin-top: 0.75rem; }
-.progress-label { font-size: 0.88rem; color: #344054; margin-bottom: 0.35rem; }
-.progress-bar { height: 8px; background: #e5e7eb; border-radius: 99px; overflow: hidden; }
-.progress-bar > span { display: block; height: 100%; background: #ff4b4b; }
+.progress-label { font-size: 0.88rem; color: var(--lede); margin-bottom: 0.35rem; }
+.progress-bar { height: 8px; background: var(--progress-track); border-radius: 99px; overflow: hidden; }
+.progress-bar > span { display: block; height: 100%; background: var(--progress-fill); }
 
 .scroll {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 10px;
-  background: #fff;
+  background: var(--surface);
   height: 72vh;
   overflow: auto;
   padding: 0.6rem;
 }
 .card {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 0.75rem;
   margin-bottom: 0.6rem;
 }
 .card-top { display: flex; justify-content: space-between; gap: 0.75rem; }
 .card h3 { margin: 0 0 0.15rem; font-size: 1rem; }
-.meta { margin: 0; color: #475467; font-size: 0.9rem; }
-.why, .mail { color: #667085; font-size: 0.82rem; margin: 0.25rem 0 0; }
+.meta { margin: 0; color: var(--lede); font-size: 0.9rem; }
+.why, .mail { color: var(--muted); font-size: 0.82rem; margin: 0.25rem 0 0; }
 .score { font-size: 1.15rem; font-weight: 700; white-space: nowrap; }
 
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.45);
+  background: var(--backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -132,7 +227,8 @@ hr.div { border: 0; border-top: 1px solid #e5e7eb; margin: 1rem 0; }
   z-index: 20;
 }
 .modal {
-  background: #fff;
+  background: var(--surface);
+  color: var(--text);
   border-radius: 12px;
   width: min(720px, 100%);
   max-height: 90vh;
@@ -141,19 +237,19 @@ hr.div { border: 0; border-top: 1px solid #e5e7eb; margin: 1rem 0; }
 }
 .modal h2 { margin: 0 0 0.75rem; }
 .email-chrome {
-  border: 1px solid #d0d5dd;
+  border: 1px solid var(--input-border);
   border-radius: 10px;
   overflow: hidden;
   margin-bottom: 0.75rem;
 }
 .email-chrome .hdr {
-  background: #f8fafc;
+  background: var(--email-hdr);
   padding: 12px 14px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border);
   font-size: 0.92rem;
 }
 .email-chrome .row { display: flex; gap: 8px; margin: 0.15rem 0; }
-.email-chrome .lbl { color: #667085; min-width: 64px; font-weight: 600; }
+.email-chrome .lbl { color: var(--muted); min-width: 64px; font-weight: 600; }
 .modal .actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
 .modal .actions .btn { width: auto; flex: 1; }
 

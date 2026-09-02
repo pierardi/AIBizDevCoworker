@@ -50,7 +50,7 @@ from openai import OpenAI
 DATA_DIR = Path(__file__).resolve().parent / "data"
 PERSIST_PATH = DATA_DIR / "top10.json"
 SETTINGS_PATH = DATA_DIR / "settings.json"
-SETTING_KEYS = ("openai_api_key", "user_name", "user_headline")
+SETTING_KEYS = ("openai_api_key", "user_name", "user_headline", "match_count", "dark_mode")
 
 st.set_page_config(page_title="BizDev Coworker", page_icon="🤝", layout="wide")
 
@@ -95,6 +95,8 @@ defaults = {
     "openai_api_key": "",
     "user_name": "",
     "user_headline": "",
+    "match_count": 10,
+    "dark_mode": False,
     "connections_df": None,
     "ranked": None,
     "ranked_topic": "",
@@ -118,6 +120,14 @@ def is_streamlit_cloud():
 
 def persist_to_disk():
     return not is_streamlit_cloud()
+
+
+def normalize_match_count(value, fallback=10):
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(1, min(100, n))
 
 
 def secret_api_key():
@@ -167,8 +177,14 @@ def load_settings():
     except Exception:
         return False
     for key in SETTING_KEYS:
+        if key not in payload:
+            continue
         value = payload.get(key)
-        if isinstance(value, str):
+        if key == "match_count":
+            st.session_state[key] = normalize_match_count(value)
+        elif key == "dark_mode":
+            st.session_state[key] = bool(value)
+        elif isinstance(value, str):
             st.session_state[key] = value
     return True
 
@@ -177,7 +193,14 @@ def save_settings():
     if not persist_to_disk():
         return
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {key: st.session_state.get(key, "") or "" for key in SETTING_KEYS}
+    payload = {}
+    for key in SETTING_KEYS:
+        if key == "match_count":
+            payload[key] = normalize_match_count(st.session_state.get(key, 10))
+        elif key == "dark_mode":
+            payload[key] = bool(st.session_state.get(key, False))
+        else:
+            payload[key] = st.session_state.get(key, "") or ""
     SETTINGS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
@@ -208,6 +231,41 @@ if not st.session_state.settings_hydrated:
 
 if not st.session_state.ranked:
     load_persisted_top10()
+
+if st.session_state.get("dark_mode"):
+    st.markdown(
+        """
+        <style>
+        .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+            background-color: #0f1419 !important;
+            color: #e8eef5 !important;
+        }
+        [data-testid="stHeader"] { background: rgba(15, 20, 25, 0.9) !important; }
+        [data-testid="stSidebar"] {
+            background-color: #1a222c !important;
+            color: #e8eef5 !important;
+        }
+        [data-testid="stSidebar"] * { color: #e8eef5; }
+        .stMarkdown, .stCaption, p, h1, h2, h3, label { color: #e8eef5 !important; }
+        .stTextInput input, .stTextArea textarea, .stNumberInput input,
+        [data-baseweb="input"] input, [data-baseweb="textarea"] textarea {
+            background-color: #12181f !important;
+            color: #e8eef5 !important;
+            caret-color: #e8eef5 !important;
+        }
+        [data-testid="stFileUploader"] { color: #e8eef5 !important; }
+        .email-chrome { border-color: #3d4d5c !important; }
+        .email-chrome .hdr {
+            background: #12181f !important;
+            border-bottom-color: #2c3947 !important;
+            color: #e8eef5 !important;
+        }
+        .match-meta { color: #b6c2d0 !important; }
+        div[data-testid="stMetricValue"] { color: #e8eef5 !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def parse_draft_payload(text, topic):
@@ -387,7 +445,7 @@ def load_connections_csv(uploaded):
     return df
 
 
-def rank_connections(df, topic):
+def rank_connections(df, topic, match_count):
     client = get_client()
     name_cols = [c for c in df.columns if "Name" in c]
     company_col = next((c for c in df.columns if "Company" in c), None)
@@ -464,7 +522,7 @@ One entry per connection given, in any order."""
         r["reason"] = s.get("reason", "")
         r["email"] = df.loc[r["id"], email_col] if email_col and pd.notna(df.loc[r["id"], email_col]) else ""
 
-    return sorted(roster, key=lambda x: x["score"], reverse=True)[:10]
+    return sorted(roster, key=lambda x: x["score"], reverse=True)[:normalize_match_count(match_count)]
 
 
 # ----------------------------------------------------------------------------
@@ -472,6 +530,7 @@ One entry per connection given, in any order."""
 # ----------------------------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ Setup")
+    st.toggle("Dark mode", key="dark_mode")
 
     st.subheader("OpenAI API Key")
     st.text_input(
@@ -493,6 +552,14 @@ with st.sidebar:
         "Your headline / role",
         key="user_headline",
         placeholder="e.g. Founder @ Acme AI | Building tools for sales teams",
+    )
+    st.number_input(
+        "Number of top matches",
+        min_value=1,
+        max_value=100,
+        step=1,
+        key="match_count",
+        help="Everyone is scored; this is how many of the highest matches to keep.",
     )
 
     st.divider()
@@ -540,7 +607,8 @@ with left:
         height=68,
         placeholder="e.g. our new AI-powered inventory forecasting tool for retail ops teams",
     )
-    run_ranking = st.button("🔍 Find top 10 matches", type="primary", width="stretch")
+    match_count = normalize_match_count(st.session_state.get("match_count", 10))
+    run_ranking = st.button(f"🔍 Find top {match_count} matches", type="primary", width="stretch")
 
     if run_ranking:
         df = st.session_state.connections_df
@@ -553,14 +621,15 @@ with left:
             st.error("Add your OpenAI API key in the sidebar first.")
         else:
             with st.spinner("Scoring your connections against the topic..."):
-                ranked = rank_connections(df, topic)
+                ranked = rank_connections(df, topic, match_count)
             st.session_state.ranked = ranked
             st.session_state.ranked_topic = topic
             st.session_state.drafts = {}
             save_top10()
 
 with right:
-    st.subheader("Top 10 matches")
+    result_count = len(st.session_state.ranked) if st.session_state.ranked else match_count
+    st.subheader(f"Top {result_count} matches")
     if st.session_state.ranked:
         topic_label = st.session_state.ranked_topic
         if topic_label:
@@ -573,7 +642,7 @@ with right:
         st.download_button(
             "Export list",
             data=ranked_export_csv(),
-            file_name="bizdev_top10_matches.csv",
+            file_name=f"bizdev_top{result_count}_matches.csv",
             mime="text/csv",
             width="stretch",
         )
@@ -598,7 +667,7 @@ with right:
                     if st.button("✍️ Draft message", key=f"draft_btn_{person['id']}", width="stretch"):
                         draft_message_dialog(person)
     else:
-        st.info("Matches will appear here after you upload a list, enter a topic, and find the top 10.")
+        st.info(f"Matches will appear here after you upload a list, enter a topic, and find the top {match_count}.")
 
 save_settings()
 if st.session_state.ranked:

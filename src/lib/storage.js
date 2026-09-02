@@ -1,6 +1,12 @@
 const SETTINGS_KEY = "bizdev-settings";
 const TOP10_KEY = "bizdev-top10";
 
+export function normalizeMatchCount(value, fallback = 10) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(100, Math.max(1, n));
+}
+
 export function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -10,6 +16,8 @@ export function loadSettings() {
       openaiApiKey: typeof data.openaiApiKey === "string" ? data.openaiApiKey : "",
       userName: typeof data.userName === "string" ? data.userName : "",
       userHeadline: typeof data.userHeadline === "string" ? data.userHeadline : "",
+      matchCount: normalizeMatchCount(data.matchCount),
+      darkMode: typeof data.darkMode === "boolean" ? data.darkMode : undefined,
     };
   } catch {
     return {};
@@ -23,6 +31,8 @@ export function saveSettings(settings) {
       openaiApiKey: settings.openaiApiKey || "",
       userName: settings.userName || "",
       userHeadline: settings.userHeadline || "",
+      matchCount: normalizeMatchCount(settings.matchCount),
+      darkMode: Boolean(settings.darkMode),
     }),
   );
 }
