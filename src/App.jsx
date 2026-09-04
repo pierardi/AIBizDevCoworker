@@ -21,6 +21,7 @@ import {
   formatRunTime,
   normalizeMatchCount,
 } from "./lib/storage";
+import { envOpenAiKey, resolveOpenAiKey } from "./lib/config";
 import "./App.css";
 
 const BATCH_SIZE = 60;
@@ -41,10 +42,16 @@ function downloadText(filename, text, mime) {
   URL.revokeObjectURL(url);
 }
 
+function truncateTopic(topic, max = 42) {
+  const text = (topic || "").trim() || "(no topic)";
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
 function formatRunLabel(run, name) {
   const who = (name || "").trim() || "Unknown";
   const when = formatRunTime(run.savedAt) || "Unknown time";
-  const what = (run.topic || "").trim() || "(no topic)";
+  const what = truncateTopic(run.topic);
   const count = run.matchCount ?? (run.ranked || []).length;
   const matches = `${count} match${count === 1 ? "" : "es"}`;
   return `${who} · ${when} · ${what} · ${matches}`;
@@ -62,7 +69,8 @@ function applyRun(run, setters) {
 
 export default function App() {
   const [ready, setReady] = useState(false);
-  const [openaiApiKey, setOpenaiApiKey] = useState(savedSettings.openaiApiKey || "");
+  const [openaiApiKey, setOpenaiApiKey] = useState(envOpenAiKey || savedSettings.openaiApiKey || "");
+  const activeOpenAiKey = resolveOpenAiKey(openaiApiKey);
   const [userName, setUserName] = useState(savedSettings.userName || getStoredUserName());
   const [userHeadline, setUserHeadline] = useState("");
   const [matchCount, setMatchCount] = useState(10);
@@ -104,7 +112,7 @@ export default function App() {
   }, [darkMode]);
 
   useEffect(() => {
-    saveSettings({ openaiApiKey, userName, darkMode });
+    saveSettings({ openaiApiKey: envOpenAiKey ? "" : openaiApiKey, userName, darkMode });
     setStoredUserName(userName);
   }, [openaiApiKey, userName, darkMode]);
 
@@ -240,8 +248,8 @@ export default function App() {
       setError("Enter a topic first.");
       return;
     }
-    if (!openaiApiKey.trim()) {
-      setError("Add your OpenAI API key in Setup first.");
+    if (!activeOpenAiKey) {
+      setError("Add your OpenAI API key in Setup, or set openai_api_key in Amplify / .env.");
       return;
     }
     if (!normalizeUserKey(userName)) {
@@ -262,7 +270,7 @@ export default function App() {
         setProcessed(start);
         try {
           const scored = await scoreBatch({
-            apiKey: openaiApiKey.trim(),
+            apiKey: activeOpenAiKey,
             userName,
             userHeadline,
             topic,
@@ -300,14 +308,14 @@ export default function App() {
     setDraftPerson(person);
     const key = String(person.id);
     if (drafts[key]) return;
-    if (!openaiApiKey.trim()) {
-      setError("Add your OpenAI API key in Setup first.");
+    if (!activeOpenAiKey) {
+      setError("Add your OpenAI API key in Setup, or set openai_api_key in Amplify / .env.");
       return;
     }
     setDraftBusy(true);
     try {
       const draft = await generateDraft({
-        apiKey: openaiApiKey.trim(),
+        apiKey: activeOpenAiKey,
         userName,
         userHeadline,
         person,
@@ -370,14 +378,20 @@ export default function App() {
         </label>
         <div className="field">
           <h3>OpenAI API Key</h3>
-          <input
-            type="password"
-            value={openaiApiKey}
-            onChange={(e) => setOpenaiApiKey(e.target.value)}
-            placeholder="sk-..."
-            autoComplete="off"
-          />
-          <span className="hint">Saved in this browser only. Get a key at platform.openai.com.</span>
+          {envOpenAiKey ? (
+            <span className="hint">Using openai_api_key from the environment.</span>
+          ) : (
+            <>
+              <input
+                type="password"
+                value={openaiApiKey}
+                onChange={(e) => setOpenaiApiKey(e.target.value)}
+                placeholder="sk-..."
+                autoComplete="off"
+              />
+              <span className="hint">Saved in this browser only, or set openai_api_key in Amplify / .env.</span>
+            </>
+          )}
         </div>
         <hr className="div" />
         <h3>Your LinkedIn Profile</h3>
@@ -405,8 +419,8 @@ export default function App() {
       <main className="main">
         <h1>🤝 BizDev Coworker</h1>
         <p className="lede">Inside-sales coworker: rank connections for a topic, then draft outreach to send yourself.</p>
-        {!openaiApiKey.trim() && (
-          <div className="warn">Add your OpenAI API key in Setup to get started.</div>
+        {!activeOpenAiKey && (
+          <div className="warn">Add your OpenAI API key in Setup, or set openai_api_key in Amplify / .env.</div>
         )}
 
         <div className="layout">

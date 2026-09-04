@@ -6,6 +6,10 @@ frontend:
         - npm ci
     build:
       commands:
+        - |
+          if [ -n "${openai_api_key:-}" ]; then export VITE_OPENAI_API_KEY="$openai_api_key"; fi
+          if [ -z "${VITE_OPENAI_API_KEY:-}" ] && [ -n "${OPENAI_API_KEY:-}" ]; then export VITE_OPENAI_API_KEY="$OPENAI_API_KEY"; fi
+          if [ -n "${API_URL:-}" ]; then export VITE_API_URL="$API_URL"; fi
         - npm run build
   artifacts:
     baseDirectory: dist
