@@ -1,12 +1,30 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { parseLinkedInCsv, rowsToRoster } from "./lib/csv";
 import { scoreBatch, generateDraft, emailToLine, exportCsv } from "./lib/openai";
-import { loadSettings, saveSettings, loadTop10, saveTop10, normalizeMatchCount } from "./lib/storage";
+import {
+  createRun,
+  deleteRun,
+  getRun,
+  getSession,
+  getStoredUserName,
+  matchesFromRanked,
+  normalizeUserKey,
+  saveDraft,
+  setStoredUserName,
+  updateSettings,
+} from "./lib/api";
+import {
+  loadSettings,
+  saveSettings,
+  localRunsPendingMigration,
+  markRunsMigrated,
+  formatRunTime,
+  normalizeMatchCount,
+} from "./lib/storage";
 import "./App.css";
 
 const BATCH_SIZE = 60;
 const savedSettings = loadSettings();
-const savedTop10 = loadTop10();
 
 function initialDarkMode() {
   if (typeof savedSettings.darkMode === "boolean") return savedSettings.darkMode;
@@ -23,19 +41,42 @@ function downloadText(filename, text, mime) {
   URL.revokeObjectURL(url);
 }
 
+function formatRunLabel(run, name) {
+  const who = (name || "").trim() || "Unknown";
+  const when = formatRunTime(run.savedAt) || "Unknown time";
+  const what = (run.topic || "").trim() || "(no topic)";
+  const count = run.matchCount ?? (run.ranked || []).length;
+  const matches = `${count} match${count === 1 ? "" : "es"}`;
+  return `${who} · ${when} · ${what} · ${matches}`;
+}
+
+function applyRun(run, setters) {
+  setters.setActiveRunId(run.id || "");
+  setters.setTopic(run.topic || "");
+  setters.setRankedTopic(run.topic || "");
+  setters.setRankedSavedAt(run.savedAt || "");
+  setters.setRanked(run.ranked || []);
+  setters.setDrafts(run.drafts || {});
+  setters.setDraftPerson(null);
+}
+
 export default function App() {
+  const [ready, setReady] = useState(false);
   const [openaiApiKey, setOpenaiApiKey] = useState(savedSettings.openaiApiKey || "");
-  const [userName, setUserName] = useState(savedSettings.userName || "");
-  const [userHeadline, setUserHeadline] = useState(savedSettings.userHeadline || "");
-  const [matchCount, setMatchCount] = useState(normalizeMatchCount(savedSettings.matchCount));
+  const [userName, setUserName] = useState(savedSettings.userName || getStoredUserName());
+  const [userHeadline, setUserHeadline] = useState("");
+  const [matchCount, setMatchCount] = useState(10);
   const [darkMode, setDarkMode] = useState(initialDarkMode);
   const [headers, setHeaders] = useState([]);
   const [rows, setRows] = useState([]);
   const [csvError, setCsvError] = useState("");
-  const [topic, setTopic] = useState(savedTop10?.rankedTopic || "");
-  const [ranked, setRanked] = useState(savedTop10?.ranked || []);
-  const [rankedTopic, setRankedTopic] = useState(savedTop10?.rankedTopic || "");
-  const [drafts, setDrafts] = useState(savedTop10?.drafts || {});
+  const [topic, setTopic] = useState("");
+  const [ranked, setRanked] = useState([]);
+  const [rankedTopic, setRankedTopic] = useState("");
+  const [rankedSavedAt, setRankedSavedAt] = useState("");
+  const [drafts, setDrafts] = useState({});
+  const [runs, setRuns] = useState([]);
+  const [activeRunId, setActiveRunId] = useState("");
   const [ranking, setRanking] = useState(false);
   const [processed, setProcessed] = useState(0);
   const [total, setTotal] = useState(0);
@@ -43,20 +84,136 @@ export default function App() {
   const [draftPerson, setDraftPerson] = useState(null);
   const [draftBusy, setDraftBusy] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [recalling, setRecalling] = useState(false);
+  const persistReady = useRef(false);
+  const draftTimer = useRef(null);
+  const sessionGen = useRef(0);
 
-  useEffect(() => {
-    saveSettings({ openaiApiKey, userName, userHeadline, matchCount, darkMode });
-  }, [openaiApiKey, userName, userHeadline, matchCount, darkMode]);
+  const runSetters = {
+    setActiveRunId,
+    setTopic,
+    setRankedTopic,
+    setRankedSavedAt,
+    setRanked,
+    setDrafts,
+    setDraftPerson,
+  };
 
   useEffect(() => {
     document.documentElement.dataset.theme = darkMode ? "dark" : "light";
   }, [darkMode]);
 
   useEffect(() => {
-    if (ranked.length) saveTop10({ ranked, rankedTopic, drafts });
-  }, [ranked, rankedTopic, drafts]);
+    saveSettings({ openaiApiKey, userName, darkMode });
+    setStoredUserName(userName);
+  }, [openaiApiKey, userName, darkMode]);
+
+  async function loadSessionForName(name, { migrate = false } = {}) {
+    const gen = ++sessionGen.current;
+    persistReady.current = false;
+    if (!normalizeUserKey(name)) {
+      setUserHeadline("");
+      setRuns([]);
+      applyRun({ id: "", topic: "", savedAt: "", ranked: [], drafts: {} }, runSetters);
+      return;
+    }
+    const session = await getSession(name);
+    let nextRuns = session.runs || [];
+    if (migrate) {
+      const pending = localRunsPendingMigration();
+      if (!nextRuns.length && pending.length) {
+        for (const local of pending) {
+          if (!local.ranked?.length) continue;
+          const created = await createRun({
+            topic: local.topic || "Untitled search",
+            requestedCount: local.ranked.length,
+            matches: matchesFromRanked(local.ranked, local.drafts || {}),
+          });
+          nextRuns = [created, ...nextRuns.filter((r) => r.id !== created.id)];
+        }
+        markRunsMigrated();
+      } else if (pending.length) {
+        markRunsMigrated();
+      }
+    }
+    if (gen !== sessionGen.current) return;
+    setUserHeadline(session.user.headline || "");
+    setMatchCount(normalizeMatchCount(session.settings.matchCount));
+    setDarkMode(Boolean(session.settings.darkMode));
+    setRuns(nextRuns);
+    if (nextRuns[0]?.id) {
+      const latest = nextRuns[0].ranked?.length ? nextRuns[0] : await getRun(nextRuns[0].id);
+      if (gen !== sessionGen.current) return;
+      applyRun(latest, runSetters);
+    } else {
+      applyRun({ id: "", topic: "", savedAt: "", ranked: [], drafts: {} }, runSetters);
+    }
+    persistReady.current = true;
+  }
+
+  useEffect(() => {
+    persistReady.current = false;
+    const first = !ready;
+    const timer = setTimeout(() => {
+      loadSessionForName(userName, { migrate: first })
+        .catch((e) => setError(`Database unavailable: ${e.message || e}`))
+        .finally(() => setReady(true));
+    }, first ? 0 : 500);
+    return () => clearTimeout(timer);
+  }, [userName]);
+
+  useEffect(() => {
+    if (!persistReady.current || !normalizeUserKey(userName)) return;
+    const timer = setTimeout(() => {
+      updateSettings({
+        headline: userHeadline,
+        matchCount: normalizeMatchCount(matchCount),
+        darkMode,
+      }).catch((e) => setError(`Couldn't save settings: ${e.message || e}`));
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [userHeadline, matchCount, darkMode]);
 
   const previewRows = useMemo(() => rows.slice(0, 20), [rows]);
+
+  async function recallRun(run) {
+    if (!run?.id) return;
+    setRecalling(true);
+    setError("");
+    try {
+      const full = run.ranked?.length ? run : await getRun(run.id);
+      applyRun(full, runSetters);
+    } catch (e) {
+      setError(`Couldn't open that search: ${e.message || e}`);
+    } finally {
+      setRecalling(false);
+    }
+  }
+
+  function onPickRun(runId) {
+    const run = runs.find((r) => r.id === runId);
+    if (run) recallRun(run);
+  }
+
+  async function removeRun(runId) {
+    try {
+      await deleteRun(runId);
+      const next = runs.filter((r) => r.id !== runId);
+      setRuns(next);
+      if (activeRunId === runId) {
+        if (next[0]) recallRun(next[0]);
+        else {
+          setActiveRunId("");
+          setRanked([]);
+          setRankedTopic("");
+          setRankedSavedAt("");
+          setDrafts({});
+        }
+      }
+    } catch (e) {
+      setError(`Couldn't delete that search: ${e.message || e}`);
+    }
+  }
 
   async function onFile(file) {
     setCsvError("");
@@ -85,6 +242,10 @@ export default function App() {
     }
     if (!openaiApiKey.trim()) {
       setError("Add your OpenAI API key in Setup first.");
+      return;
+    }
+    if (!normalizeUserKey(userName)) {
+      setError("Enter your name in Setup first. Saved searches are stored under that name.");
       return;
     }
 
@@ -121,9 +282,15 @@ export default function App() {
       });
       const take = Math.min(normalizeMatchCount(matchCount), withScores.length);
       const top = [...withScores].sort((a, b) => b.score - a.score).slice(0, take);
-      setRanked(top);
-      setRankedTopic(topic);
-      setDrafts({});
+      const saved = await createRun({
+        topic: topic.trim(),
+        requestedCount: take,
+        matches: matchesFromRanked(top),
+      });
+      setRuns((prev) => [saved, ...prev.filter((r) => r.id !== saved.id)].slice(0, 50));
+      applyRun(saved, runSetters);
+    } catch (e) {
+      setError((prev) => prev || `Couldn't save this search: ${e.message || e}`);
     } finally {
       setRanking(false);
     }
@@ -147,6 +314,7 @@ export default function App() {
         topic: rankedTopic || topic,
       });
       setDrafts((d) => ({ ...d, [key]: draft }));
+      if (person.matchId) await saveDraft(person.matchId, draft);
     } catch (e) {
       setError(`Couldn't draft this message: ${e.message || e}`);
       setDraftPerson(null);
@@ -155,14 +323,35 @@ export default function App() {
     }
   }
 
-  function updateDraft(personId, patch) {
-    const key = String(personId);
-    setDrafts((d) => ({ ...d, [key]: { ...(d[key] || {}), ...patch } }));
+  function updateDraft(person, patch) {
+    const key = String(person.id);
+    setDrafts((d) => {
+      const next = { ...d, [key]: { ...(d[key] || {}), ...patch } };
+      if (person.matchId) {
+        clearTimeout(draftTimer.current);
+        draftTimer.current = setTimeout(() => {
+          saveDraft(person.matchId, next[key]).catch((e) => {
+            setError(`Couldn't save draft: ${e.message || e}`);
+          });
+        }, 400);
+      }
+      return next;
+    });
   }
 
   const left = Math.max(0, total - processed);
   const draft = draftPerson ? drafts[String(draftPerson.id)] : null;
   const fromName = userName || "Me";
+
+  if (!ready) {
+    return (
+      <div className="app">
+        <main className="main">
+          <div className="info">Connecting to your saved searches…</div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -192,7 +381,7 @@ export default function App() {
         </div>
         <hr className="div" />
         <h3>Your LinkedIn Profile</h3>
-        <p className="hint">Used so drafted messages sound like you. Saved in this browser.</p>
+        <p className="hint">Your name is the account key. The same name loads the same saved searches.</p>
         <div className="field">
           <label htmlFor="userName">Your name</label>
           <input id="userName" value={userName} onChange={(e) => setUserName(e.target.value)} />
@@ -205,20 +394,6 @@ export default function App() {
             onChange={(e) => setUserHeadline(e.target.value)}
             placeholder="e.g. Founder @ Acme AI | Building tools for sales teams"
           />
-        </div>
-        <div className="field">
-          <label htmlFor="matchCount">Number of top matches</label>
-          <input
-            id="matchCount"
-            type="number"
-            min="1"
-            max="100"
-            step="1"
-            value={matchCount}
-            onChange={(e) => setMatchCount(e.target.value === "" ? "" : Number(e.target.value))}
-            onBlur={() => setMatchCount(normalizeMatchCount(matchCount))}
-          />
-          <span className="hint">Everyone is scored; this is how many of the highest matches to keep (1–100).</span>
         </div>
         <hr className="div" />
         <p className="fine">
@@ -285,6 +460,20 @@ export default function App() {
                 placeholder="e.g. our new AI-powered inventory forecasting tool for retail ops teams"
               />
             </div>
+            <div className="field match-count-field">
+              <label htmlFor="matchCount">Number of top matches</label>
+              <input
+                id="matchCount"
+                type="number"
+                min="1"
+                max="100"
+                step="1"
+                value={matchCount}
+                onChange={(e) => setMatchCount(e.target.value === "" ? "" : Number(e.target.value))}
+                onBlur={() => setMatchCount(normalizeMatchCount(matchCount))}
+              />
+              <span className="hint">Everyone is scored; this is how many of the highest matches to keep (1–100).</span>
+            </div>
             <button className="btn btn-primary" type="button" onClick={findMatches} disabled={ranking}>
               {ranking ? "Scoring…" : `🔍 Find top ${matchCount} matches`}
             </button>
@@ -303,10 +492,50 @@ export default function App() {
 
           <section className="panel">
             <h2>Top {ranked.length || matchCount} matches</h2>
+            <div className="run-picker">
+              <label htmlFor="priorRun">Prior runs</label>
+              <div className="run-picker-row">
+                <select
+                  id="priorRun"
+                  value={activeRunId}
+                  disabled={!runs.length || recalling}
+                  onChange={(e) => onPickRun(e.target.value)}
+                >
+                  {!runs.length ? (
+                    <option value="">
+                      {normalizeUserKey(userName)
+                        ? "No saved runs for this name yet"
+                        : "Enter your name to see saved runs"}
+                    </option>
+                  ) : !activeRunId ? (
+                    <option value="">Select a prior run…</option>
+                  ) : null}
+                  {runs.map((run) => (
+                    <option key={run.id} value={run.id}>
+                      {formatRunLabel(run, userName)}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="run-delete"
+                  disabled={!activeRunId || recalling}
+                  onClick={() => activeRunId && removeRun(activeRunId)}
+                  aria-label="Delete this saved search"
+                >
+                  ×
+                </button>
+              </div>
+              <p className="hint">
+                {recalling
+                  ? "Loading that run…"
+                  : "Each row is name · timestamp · topic. Pick one to show its match list."}
+              </p>
+            </div>
             {ranked.length > 0 ? (
               <>
                 {rankedTopic && <p className="hint">Ranked for: {rankedTopic}</p>}
-                <p className="hint">Saved in this browser — the list stays after refresh.</p>
+                {rankedSavedAt && <p className="hint">Run: {formatRunTime(rankedSavedAt)}</p>}
                 <div className="btn-row">
                   <button
                     className="btn btn-secondary"
@@ -318,7 +547,7 @@ export default function App() {
                 </div>
                 <div className="scroll">
                   {ranked.map((person, i) => (
-                    <article className="card" key={person.id}>
+                    <article className="card" key={person.matchId || person.id}>
                       <div className="card-top">
                         <div>
                           <h3>{i + 1}. {person.name}</h3>
@@ -367,7 +596,7 @@ export default function App() {
                   <input
                     id="subject"
                     value={draft?.subject || ""}
-                    onChange={(e) => updateDraft(draftPerson.id, { subject: e.target.value })}
+                    onChange={(e) => updateDraft(draftPerson, { subject: e.target.value })}
                   />
                 </div>
                 <div className="field">
@@ -376,7 +605,7 @@ export default function App() {
                     id="body"
                     rows={8}
                     value={draft?.body || ""}
-                    onChange={(e) => updateDraft(draftPerson.id, { body: e.target.value })}
+                    onChange={(e) => updateDraft(draftPerson, { body: e.target.value })}
                   />
                 </div>
                 <div className="actions">

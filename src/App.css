@@ -66,6 +66,11 @@
   background: var(--surface);
   border-right: 1px solid var(--border);
   padding: 1.25rem 1.1rem;
+  overflow-y: auto;
+}
+
+.match-count-field input {
+  max-width: 8rem;
 }
 
 .sidebar h2 { margin: 0 0 1rem; font-size: 1.05rem; }
@@ -160,7 +165,76 @@ hr.div { border: 0; border-top: 1px solid var(--border); margin: 1rem 0; }
   align-items: start;
 }
 
-.panel h2 { margin: 0 0 0.35rem; font-size: 1.1rem; }
+.saved-runs {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  margin: 0.4rem 0 0;
+}
+.run-item {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+}
+.run-item:last-child { border-bottom: 0; }
+.run-item.active { background: var(--info-bg); }
+.run-open {
+  flex: 1;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0.55rem 0.65rem;
+}
+.run-open:hover { background: var(--bg); }
+.run-topic {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-weight: 600;
+  font-size: 0.86rem;
+}
+.run-time, .run-meta { display: block; color: var(--muted); font-size: 0.75rem; margin-top: 0.15rem; }
+.run-delete {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  width: 2rem;
+  font-size: 1.2rem;
+}
+.run-delete:hover { color: var(--err); }
+.run-delete:disabled { opacity: 0.4; cursor: default; }
+
+.run-picker { margin: 0 0 0.85rem; }
+.run-picker label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+.run-picker-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+.run-picker select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.panel h2 { margin: 1.1rem 0 0.35rem; font-size: 1.1rem; }
+.panel h2:first-of-type { margin-top: 0; }
 .drop {
   border: 1.5px dashed var(--drop-border);
   border-radius: 10px;

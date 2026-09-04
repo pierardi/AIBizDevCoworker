@@ -40,6 +40,7 @@ import html
 import io
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,8 +50,10 @@ from openai import OpenAI
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 PERSIST_PATH = DATA_DIR / "top10.json"
+RUNS_PATH = DATA_DIR / "runs.json"
 SETTINGS_PATH = DATA_DIR / "settings.json"
 SETTING_KEYS = ("openai_api_key", "user_name", "user_headline", "match_count", "dark_mode")
+MAX_RUNS = 50
 
 st.set_page_config(page_title="BizDev Coworker", page_icon="🤝", layout="wide")
 
@@ -102,6 +105,9 @@ defaults = {
     "ranked_topic": "",
     "ranked_saved_at": "",
     "drafts": {},
+    "runs": [],
+    "active_run_id": "",
+    "pending_recall_id": "",
     "settings_hydrated": False,
 }
 for k, v in defaults.items():
@@ -204,23 +210,102 @@ def save_settings():
     SETTINGS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def load_persisted_top10():
-    if not persist_to_disk() or not PERSIST_PATH.exists():
-        return False
+def format_run_time(iso):
+    if not iso:
+        return ""
     try:
-        payload = json.loads(PERSIST_PATH.read_text(encoding="utf-8"))
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        return dt.astimezone().strftime("%Y-%m-%d %H:%M")
     except Exception:
-        return False
-    ranked = payload.get("ranked")
-    if not ranked:
-        return False
-    st.session_state.ranked = ranked
-    st.session_state.ranked_topic = payload.get("ranked_topic") or ""
-    st.session_state.ranked_saved_at = payload.get("saved_at") or ""
-    st.session_state.drafts = drafts_from_json(payload.get("drafts"))
-    if st.session_state.ranked_topic and "topic" not in st.session_state:
-        st.session_state.topic = st.session_state.ranked_topic
-    return True
+        return str(iso)
+
+
+def apply_run(run):
+    st.session_state.active_run_id = run.get("id") or ""
+    st.session_state.ranked = run.get("ranked")
+    st.session_state.ranked_topic = run.get("topic") or ""
+    st.session_state.ranked_saved_at = run.get("saved_at") or ""
+    st.session_state.drafts = drafts_from_json(run.get("drafts"))
+    if run.get("topic"):
+        st.session_state.topic = run["topic"]
+
+
+def load_runs():
+    runs = []
+    if persist_to_disk() and RUNS_PATH.exists():
+        try:
+            payload = json.loads(RUNS_PATH.read_text(encoding="utf-8"))
+            runs = payload.get("runs") or []
+        except Exception:
+            runs = []
+    if not runs and persist_to_disk() and PERSIST_PATH.exists():
+        try:
+            payload = json.loads(PERSIST_PATH.read_text(encoding="utf-8"))
+            ranked = payload.get("ranked")
+            if ranked:
+                runs = [{
+                    "id": str(uuid.uuid4()),
+                    "topic": payload.get("ranked_topic") or "",
+                    "saved_at": payload.get("saved_at") or datetime.now(timezone.utc).isoformat(),
+                    "ranked": ranked,
+                    "drafts": payload.get("drafts") or {},
+                }]
+        except Exception:
+            runs = []
+    st.session_state.runs = runs
+    if runs and not st.session_state.ranked:
+        apply_run(runs[0])
+    return bool(runs)
+
+
+def save_runs_file():
+    if not persist_to_disk():
+        return
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    RUNS_PATH.write_text(
+        json.dumps({"runs": st.session_state.runs[:MAX_RUNS]}, indent=2, default=_json_default),
+        encoding="utf-8",
+    )
+
+
+def collect_drafts():
+    drafts = {}
+    for person in st.session_state.ranked or []:
+        pid = person["id"]
+        draft = current_draft(pid)
+        if draft.get("subject") or draft.get("body"):
+            drafts[pid] = draft
+        elif pid in st.session_state.drafts:
+            drafts[pid] = st.session_state.drafts[pid]
+    return drafts
+
+
+def upsert_current_run(is_new=False):
+    if not st.session_state.ranked:
+        return
+    drafts = collect_drafts()
+    st.session_state.drafts = drafts
+    if is_new:
+        run_id = str(uuid.uuid4())
+        saved_at = datetime.now(timezone.utc).isoformat()
+        st.session_state.active_run_id = run_id
+        st.session_state.ranked_saved_at = saved_at
+    else:
+        run_id = st.session_state.active_run_id or str(uuid.uuid4())
+        saved_at = st.session_state.ranked_saved_at or datetime.now(timezone.utc).isoformat()
+        st.session_state.active_run_id = run_id
+        if not st.session_state.ranked_saved_at:
+            st.session_state.ranked_saved_at = saved_at
+    run = {
+        "id": run_id,
+        "topic": st.session_state.ranked_topic,
+        "saved_at": saved_at,
+        "ranked": st.session_state.ranked,
+        "drafts": drafts_for_json(drafts),
+    }
+    others = [r for r in st.session_state.runs if r.get("id") != run_id]
+    st.session_state.runs = [run, *others][:MAX_RUNS]
+    save_runs_file()
 
 
 if not st.session_state.settings_hydrated:
@@ -229,8 +314,16 @@ if not st.session_state.settings_hydrated:
         st.session_state.openai_api_key = secret_api_key()
     st.session_state.settings_hydrated = True
 
-if not st.session_state.ranked:
-    load_persisted_top10()
+if not st.session_state.get("runs_hydrated"):
+    load_runs()
+    st.session_state.runs_hydrated = True
+
+if st.session_state.get("pending_recall_id"):
+    rid = st.session_state.pending_recall_id
+    st.session_state.pending_recall_id = ""
+    run = next((r for r in st.session_state.runs if r.get("id") == rid), None)
+    if run:
+        apply_run(run)
 
 if st.session_state.get("dark_mode"):
     st.markdown(
@@ -303,31 +396,7 @@ def current_draft(person_id):
 
 
 def save_top10():
-    if not st.session_state.ranked:
-        return
-    drafts = {}
-    for person in st.session_state.ranked:
-        pid = person["id"]
-        draft = current_draft(pid)
-        if draft.get("subject") or draft.get("body"):
-            drafts[pid] = draft
-        elif pid in st.session_state.drafts:
-            drafts[pid] = st.session_state.drafts[pid]
-    st.session_state.drafts = drafts
-    st.session_state.ranked_saved_at = datetime.now(timezone.utc).isoformat()
-    if not persist_to_disk():
-        return
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "saved_at": st.session_state.ranked_saved_at,
-        "ranked_topic": st.session_state.ranked_topic,
-        "ranked": st.session_state.ranked,
-        "drafts": drafts_for_json(drafts),
-    }
-    PERSIST_PATH.write_text(
-        json.dumps(payload, indent=2, default=_json_default),
-        encoding="utf-8",
-    )
+    upsert_current_run(is_new=False)
 
 
 def ranked_export_csv():
@@ -625,7 +694,41 @@ with left:
             st.session_state.ranked = ranked
             st.session_state.ranked_topic = topic
             st.session_state.drafts = {}
-            save_top10()
+            upsert_current_run(is_new=True)
+
+    st.subheader("Saved searches")
+    if not st.session_state.runs:
+        st.caption("Completed searches will be stored here by topic and time.")
+    else:
+        with st.container(height=280, border=True):
+            for run in st.session_state.runs:
+                rid = run.get("id") or ""
+                topic_preview = (run.get("topic") or "(no topic)").strip()
+                when = format_run_time(run.get("saved_at"))
+                n = len(run.get("ranked") or [])
+                cols = st.columns([4, 1, 1])
+                with cols[0]:
+                    marker = "▸ " if rid == st.session_state.active_run_id else ""
+                    st.markdown(f"{marker}**{html.escape(topic_preview[:80])}**")
+                    st.caption(f"{when} · {n} matches")
+                with cols[1]:
+                    if st.button("Open", key=f"open_run_{rid}", width="stretch"):
+                        st.session_state.pending_recall_id = rid
+                        st.rerun()
+                with cols[2]:
+                    if st.button("Del", key=f"del_run_{rid}", width="stretch"):
+                        st.session_state.runs = [r for r in st.session_state.runs if r.get("id") != rid]
+                        save_runs_file()
+                        if st.session_state.active_run_id == rid:
+                            if st.session_state.runs:
+                                st.session_state.pending_recall_id = st.session_state.runs[0]["id"]
+                            else:
+                                st.session_state.ranked = None
+                                st.session_state.ranked_topic = ""
+                                st.session_state.ranked_saved_at = ""
+                                st.session_state.drafts = {}
+                                st.session_state.active_run_id = ""
+                        st.rerun()
 
 with right:
     result_count = len(st.session_state.ranked) if st.session_state.ranked else match_count
@@ -634,10 +737,12 @@ with right:
         topic_label = st.session_state.ranked_topic
         if topic_label:
             st.caption(f"Ranked for: {topic_label}")
+        if st.session_state.ranked_saved_at:
+            st.caption(f"Run: {format_run_time(st.session_state.ranked_saved_at)}")
         st.caption(
-            "Saved on this computer — the list stays after refresh."
+            "Saved on this computer, indexed by topic — open a saved search to recall it."
             if persist_to_disk()
-            else "Kept for this browser session. Export the list if you want a copy."
+            else "Kept for this browser session, indexed by topic."
         )
         st.download_button(
             "Export list",
